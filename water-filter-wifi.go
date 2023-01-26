@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"time"
@@ -16,26 +15,26 @@ const (
 	remoteNo   int = 26
 	solenoidNo int = 4
 	bellNo     int = 2
-	// TODO:get actuall pin numbers from hardware
-	filepath = "runtime"
+	filepath       = "runtime"
+	soundPath      = "/home/pi/waterfilter/chirp.wav"
+	msg            = "click"
 )
 
 var runtime uint8 = 40
 
 /*
-comon always high
-nO normally open
-// TODO:get new pin numbers from bash code
 remote :
 	5v pin no 4 brown
 	gnd pin 6 black
-	normally open pin 8 white bcm-14
-	common pin no 10 grey bcm-15
+	signal pin no color bcm-26
 
-relay :
+solenoid relay :
     5v pin no 2 blue
     gnd pin no 9 green
-	solenoid pin no  white 7  bcm-4
+	solenoid pin no color bcm-4
+
+bell :
+	signal pin no color bcm-2
 */
 
 type wfilter struct {
@@ -45,6 +44,7 @@ type wfilter struct {
 	file       *os.File
 	bell       *rpio.Line
 	readWriter *bufio.ReadWriter
+	clicks     *chan string
 }
 
 func (w *wfilter) intiFile() error {
@@ -67,63 +67,37 @@ func (w *wfilter) intiFile() error {
 	return nil
 }
 
-func setup() (*wfilter, error) {
-	// addr, err := net.ResolveTCPAddr("tcp", myAddr)
-	// if err != nil {
-	// 	return nil, err
-	// }
+func newWFilter() *wfilter {
+	return &wfilter{}
+}
 
-	w := wfilter{}
-	/*
-		l, err := net.ListenTCP("tcp", nil)
-		if err != nil {
-			return nil, err
-		}
-	*/
-	// remote, err := rpio.NewChip("remote")
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// solenoidChip, err := rpio.NewChip("solenoid")
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// bellChip, err := rpio.NewChip("bell")
-	// if err != nil {
-	// 	return nil, err
-	// }
+func (w *wfilter) setup() error {
+	channel := make(chan string)
+	w.clicks = &channel
 
 	remotePin, err := rpio.RequestLine("gpiochip0", remoteNo,
 		rpio.WithPullDown,
 		rpio.WithRisingEdge,
 		rpio.WithEventHandler(w.toRunWater))
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	// nO, err := rpio.RequestLine("remote", remoteNoNO, gpiod.WithPullDown, gpiod.AsInput)
-	// if  err != nil {
-	// 	return nil, err
-	// }
 
 	solenoidPin, err := rpio.RequestLine("gpiochip0", solenoidNo, rpio.AsOutput(0))
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	bellPin, err := rpio.RequestLine("gpiochip0", bellNo, rpio.AsOutput(1))
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	w.remote = remotePin
 	w.solenoid = solenoidPin
 	w.bell = bellPin
-	//	w.listner = l
 
-	return &w, nil
+	return nil
 }
 
 func chirp() error {
@@ -152,47 +126,30 @@ func (w *wfilter) handleRequest() error {
 }
 
 func (w *wfilter) toRunWater(line rpio.LineEvent) {
-	fmt.Println("got run command")
-	w.runWater()
+	select {
+	case *w.clicks <- msg:
+	default:
+	}
 }
 
 func (w *wfilter) runWater() {
-	go chirp()
 	w.solenoid.SetValue(1)
+	chirp()
 	time.Sleep(time.Second * time.Duration(runtime))
+	// TODO: account for time taken by chirp
 	w.solenoid.SetValue(0)
 }
 
-// func runner() {
-// 	f, err := setup()
-// 	if err != nil {
-// 		panic(err)
-// 	}
-
-// 	go f.handleRequest()
-
-// 	for {
-// 		if f.toRunWater() {
-// 			f.runWater()
-// 			time.Sleep(time.Second * 10)
-// 		}
-// 		time.Sleep(time.Second)
-// 	}
-// }
-
 func main() {
-	_, err := setup()
+	wf := newWFilter()
+	err := wf.setup()
 	if err != nil {
 		panic(err)
-	}
-	fmt.Println("finished setup")
-
-	//	err = f.handleRequest()
-	if err != nil {
-		panic(err)
+		// TODO: logging
 	}
 
 	for {
-		time.Sleep(10000)
+		_ = <-*wf.clicks
+		wf.runWater()
 	}
 }
