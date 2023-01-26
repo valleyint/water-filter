@@ -14,7 +14,6 @@ import (
 const (
 	remoteNo   int = 26
 	solenoidNo int = 4
-	bellNo     int = 2
 	filepath       = "runtime"
 	soundPath      = "/home/pi/waterfilter/chirp.wav"
 	msg            = "click"
@@ -33,8 +32,6 @@ solenoid relay :
     gnd pin no 9 green
 	solenoid pin no color bcm-4
 
-bell :
-	signal pin no color bcm-2
 */
 
 type wfilter struct {
@@ -47,34 +44,13 @@ type wfilter struct {
 	clicks     *chan string
 }
 
-func (w *wfilter) intiFile() error {
-	ourFile, err := os.Open(filepath)
-	if err != nil {
-		return err
-	}
-
-	ourReader := bufio.NewReader(ourFile)
-	ourWriter := bufio.NewWriter(ourFile)
-	ourReadWriter := bufio.NewReadWriter(ourReader, ourWriter)
-
-	runtime, err = ourReader.ReadByte()
-	if err != nil {
-		return err
-	}
-
-	w.file = ourFile
-	w.readWriter = ourReadWriter
-	return nil
-}
-
 func newWFilter() *wfilter {
-	return &wfilter{}
+	channel := make(chan string)
+
+	return &wfilter{clicks: &channel}
 }
 
 func (w *wfilter) setup() error {
-	channel := make(chan string)
-	w.clicks = &channel
-
 	remotePin, err := rpio.RequestLine("gpiochip0", remoteNo,
 		rpio.WithPullDown,
 		rpio.WithRisingEdge,
@@ -88,14 +64,8 @@ func (w *wfilter) setup() error {
 		return err
 	}
 
-	bellPin, err := rpio.RequestLine("gpiochip0", bellNo, rpio.AsOutput(1))
-	if err != nil {
-		return err
-	}
-
 	w.remote = remotePin
 	w.solenoid = solenoidPin
-	w.bell = bellPin
 
 	return nil
 }
@@ -140,6 +110,13 @@ func (w *wfilter) runWater() {
 	w.solenoid.SetValue(0)
 }
 
+func (w *wfilter) nonBlockingClear() {
+	select {
+	case _ = <-*w.clicks:
+	default:
+	}
+}
+
 func main() {
 	wf := newWFilter()
 	err := wf.setup()
@@ -151,5 +128,6 @@ func main() {
 	for {
 		_ = <-*wf.clicks
 		wf.runWater()
+		wf.nonBlockingClear()
 	}
 }
