@@ -1,10 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"errors"
-	"net"
-	"os"
 	"time"
 
 	"github.com/aerth/playwav"
@@ -35,13 +31,9 @@ solenoid relay :
 */
 
 type wfilter struct {
-	listner    *net.TCPListener
-	remote     *rpio.Line
-	solenoid   *rpio.Line
-	file       *os.File
-	bell       *rpio.Line
-	readWriter *bufio.ReadWriter
-	clicks     *chan string
+	remote   *rpio.Line
+	solenoid *rpio.Line
+	clicks   *chan string
 }
 
 func newWFilter() *wfilter {
@@ -54,7 +46,7 @@ func (w *wfilter) setup() error {
 	remotePin, err := rpio.RequestLine("gpiochip0", remoteNo,
 		rpio.WithPullDown,
 		rpio.WithRisingEdge,
-		rpio.WithEventHandler(w.toRunWater))
+		rpio.WithEventHandler(w.handleClick))
 	if err != nil {
 		return err
 	}
@@ -70,35 +62,16 @@ func (w *wfilter) setup() error {
 	return nil
 }
 
-func chirp() error {
-	playwav.FromFile("/home/pi/waterfilter/chirp.wav")
-	return nil
+func chirp() {
+	playwav.FromFile(soundPath)
 }
 
-func (w *wfilter) handleRequest() error {
-	for {
-		conn, err := w.listner.Accept()
-		if err != nil {
-			return err
-		}
-
-		newValArr := []byte{0}
-		conn.Read(newValArr)
-		runtime = newValArr[0]
-
-		n, err := w.file.WriteAt(newValArr, 0)
-		if err != nil || n != 0 {
-			conn.Close()
-			return errors.New("didnt write")
-		}
-		conn.Close()
-	}
-}
-
-func (w *wfilter) toRunWater(line rpio.LineEvent) {
+func (w *wfilter) handleClick(_ rpio.LineEvent) {
 	select {
 	case *w.clicks <- msg:
+		// sucessfully sent
 	default:
+		// channel full
 	}
 }
 
@@ -110,11 +83,17 @@ func (w *wfilter) runWater() {
 	w.solenoid.SetValue(0)
 }
 
-func (w *wfilter) nonBlockingClear() {
+func (w *wfilter) clearClicks() {
 	select {
 	case _ = <-*w.clicks:
+		// cleared
 	default:
+		// nothing to clear
 	}
+}
+
+func (w *wfilter) waitForClick() {
+	_ = <-*w.clicks
 }
 
 func main() {
@@ -126,8 +105,8 @@ func main() {
 	}
 
 	for {
-		_ = <-*wf.clicks
+		wf.waitForClick()
 		wf.runWater()
-		wf.nonBlockingClear()
+		wf.clearClicks()
 	}
 }
