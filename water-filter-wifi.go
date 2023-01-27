@@ -1,9 +1,10 @@
 package main
 
 import (
+	"log"
+	"os/exec"
 	"time"
 
-	"github.com/aerth/playwav"
 	rpio "github.com/warthog618/gpiod"
 )
 
@@ -11,7 +12,7 @@ const (
 	remoteNo   int = 26
 	solenoidNo int = 4
 	filepath       = "runtime"
-	soundPath      = "/home/pi/waterfilter/chirp.wav"
+	soundPath      = "/home/pi/water-filter/chirp.wav"
 	msg            = "click"
 )
 
@@ -28,12 +29,16 @@ solenoid relay :
     gnd pin no 9 green
 	solenoid pin no color bcm-4
 
+	TODO : find pins for chirper
+
+	U file 8bit 8khz
 */
 
 type wfilter struct {
 	remote   *rpio.Line
 	solenoid *rpio.Line
 	clicks   *chan string
+	command  *exec.Cmd
 }
 
 func newWFilter() *wfilter {
@@ -43,6 +48,8 @@ func newWFilter() *wfilter {
 }
 
 func (w *wfilter) setup() error {
+	cmd := exec.Command("aplay", soundPath)
+
 	remotePin, err := rpio.RequestLine("gpiochip0", remoteNo,
 		rpio.WithPullDown,
 		rpio.WithRisingEdge,
@@ -58,12 +65,14 @@ func (w *wfilter) setup() error {
 
 	w.remote = remotePin
 	w.solenoid = solenoidPin
+	w.command = cmd
 
 	return nil
 }
 
-func chirp() {
-	playwav.FromFile(soundPath)
+func (w *wfilter) chirp() error {
+	err := w.command.Run()
+	return err
 }
 
 func (w *wfilter) handleClick(_ rpio.LineEvent) {
@@ -77,7 +86,12 @@ func (w *wfilter) handleClick(_ rpio.LineEvent) {
 
 func (w *wfilter) runWater() {
 	w.solenoid.SetValue(1)
-	chirp()
+
+	err := w.chirp()
+	if err != nil {
+		log.Println("error while chirping", err)
+	}
+
 	time.Sleep(time.Second * time.Duration(runtime))
 	// TODO: account for time taken by chirp
 	w.solenoid.SetValue(0)
@@ -100,8 +114,8 @@ func main() {
 	wf := newWFilter()
 	err := wf.setup()
 	if err != nil {
-		panic(err)
-		// TODO: logging
+		log.Println("error while setting up", err)
+		return
 	}
 
 	for {
