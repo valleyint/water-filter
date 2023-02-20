@@ -34,6 +34,12 @@ solenoid relay :
 	U file 8bit 8khz
 */
 
+func chirp() error {
+	cmd := exec.Command("aplay", soundPath)
+	err := cmd.Run()
+	return err
+}
+
 type wfilter struct {
 	remote   *rpio.Line
 	solenoid *rpio.Line
@@ -70,11 +76,6 @@ func (w *wfilter) setup() error {
 	return nil
 }
 
-func (w *wfilter) chirp() error {
-	err := w.command.Run()
-	return err
-}
-
 func (w *wfilter) handleClick(_ rpio.LineEvent) {
 	select {
 	case *w.clicks <- msg:
@@ -87,7 +88,7 @@ func (w *wfilter) handleClick(_ rpio.LineEvent) {
 func (w *wfilter) runWater() {
 	w.solenoid.SetValue(1)
 
-	err := w.chirp()
+	err := chirp()
 	if err != nil {
 		log.Println("error while chirping", err)
 	}
