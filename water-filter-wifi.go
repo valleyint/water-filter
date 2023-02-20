@@ -1,198 +1,127 @@
 package main
 
 import (
-	"bufio"
-	"errors"
-	"fmt"
-	"net"
-	"os"
+	"log"
+	"os/exec"
 	"time"
 
-	"github.com/aerth/playwav"
 	rpio "github.com/warthog618/gpiod"
 )
 
 const (
 	remoteNo   int = 26
 	solenoidNo int = 4
-	bellNo     int = 2
-	// TODO:get actuall pin numbers from hardware
-	filepath = "runtime"
+	filepath       = "runtime"
+	soundPath      = "/home/pi/water-filter/chirp.wav"
+	msg            = "click"
 )
 
 var runtime uint8 = 40
 
 /*
-comon always high
-nO normally open
-// TODO:get new pin numbers from bash code
 remote :
 	5v pin no 4 brown
 	gnd pin 6 black
-	normally open pin 8 white bcm-14
-	common pin no 10 grey bcm-15
+	signal pin no color bcm-26
 
-relay :
+solenoid relay :
     5v pin no 2 blue
     gnd pin no 9 green
-	solenoid pin no  white 7  bcm-4
+	solenoid pin no color bcm-4
+
+	TODO : find pins for chirper
+
+	U file 8bit 8khz
 */
 
+func chirp() error {
+	cmd := exec.Command("aplay", soundPath)
+	err := cmd.Run()
+	return err
+}
+
 type wfilter struct {
-	listner    *net.TCPListener
-	remote     *rpio.Line
-	solenoid   *rpio.Line
-	file       *os.File
-	bell       *rpio.Line
-	readWriter *bufio.ReadWriter
+	remote   *rpio.Line
+	solenoid *rpio.Line
+	clicks   *chan string
+	command  *exec.Cmd
 }
 
-func (w *wfilter) intiFile() error {
-	ourFile, err := os.Open(filepath)
-	if err != nil {
-		return err
-	}
+func newWFilter() *wfilter {
+	channel := make(chan string)
 
-	ourReader := bufio.NewReader(ourFile)
-	ourWriter := bufio.NewWriter(ourFile)
-	ourReadWriter := bufio.NewReadWriter(ourReader, ourWriter)
-
-	runtime, err = ourReader.ReadByte()
-	if err != nil {
-		return err
-	}
-
-	w.file = ourFile
-	w.readWriter = ourReadWriter
-	return nil
+	return &wfilter{clicks: &channel}
 }
 
-func setup() (*wfilter, error) {
-	// addr, err := net.ResolveTCPAddr("tcp", myAddr)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	w := wfilter{}
-	/*
-		l, err := net.ListenTCP("tcp", nil)
-		if err != nil {
-			return nil, err
-		}
-	*/
-	// remote, err := rpio.NewChip("remote")
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// solenoidChip, err := rpio.NewChip("solenoid")
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// bellChip, err := rpio.NewChip("bell")
-	// if err != nil {
-	// 	return nil, err
-	// }
+func (w *wfilter) setup() error {
+	cmd := exec.Command("aplay", soundPath)
 
 	remotePin, err := rpio.RequestLine("gpiochip0", remoteNo,
 		rpio.WithPullDown,
 		rpio.WithRisingEdge,
-		rpio.WithEventHandler(w.toRunWater))
+		rpio.WithEventHandler(w.handleClick))
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	// nO, err := rpio.RequestLine("remote", remoteNoNO, gpiod.WithPullDown, gpiod.AsInput)
-	// if  err != nil {
-	// 	return nil, err
-	// }
 
 	solenoidPin, err := rpio.RequestLine("gpiochip0", solenoidNo, rpio.AsOutput(0))
 	if err != nil {
-		return nil, err
-	}
-
-	bellPin, err := rpio.RequestLine("gpiochip0", bellNo, rpio.AsOutput(1))
-	if err != nil {
-		return nil, err
+		return err
 	}
 
 	w.remote = remotePin
 	w.solenoid = solenoidPin
-	w.bell = bellPin
-	//	w.listner = l
+	w.command = cmd
 
-	return &w, nil
-}
-
-func chirp() error {
-	playwav.FromFile("/home/pi/waterfilter/chirp.wav")
 	return nil
 }
 
-func (w *wfilter) handleRequest() error {
-	for {
-		conn, err := w.listner.Accept()
-		if err != nil {
-			return err
-		}
-
-		newValArr := []byte{0}
-		conn.Read(newValArr)
-		runtime = newValArr[0]
-
-		n, err := w.file.WriteAt(newValArr, 0)
-		if err != nil || n != 0 {
-			conn.Close()
-			return errors.New("didnt write")
-		}
-		conn.Close()
+func (w *wfilter) handleClick(_ rpio.LineEvent) {
+	select {
+	case *w.clicks <- msg:
+		// sucessfully sent
+	default:
+		// channel full
 	}
-}
-
-func (w *wfilter) toRunWater(line rpio.LineEvent) {
-	fmt.Println("got run command")
-	w.runWater()
 }
 
 func (w *wfilter) runWater() {
-	go chirp()
 	w.solenoid.SetValue(1)
+
+	err := chirp()
+	if err != nil {
+		log.Println("error while chirping", err)
+	}
+
 	time.Sleep(time.Second * time.Duration(runtime))
+	// TODO: account for time taken by chirp
 	w.solenoid.SetValue(0)
 }
 
-// func runner() {
-// 	f, err := setup()
-// 	if err != nil {
-// 		panic(err)
-// 	}
+func (w *wfilter) clearClicks() {
+	select {
+	case _ = <-*w.clicks:
+		// cleared
+	default:
+		// nothing to clear
+	}
+}
 
-// 	go f.handleRequest()
-
-// 	for {
-// 		if f.toRunWater() {
-// 			f.runWater()
-// 			time.Sleep(time.Second * 10)
-// 		}
-// 		time.Sleep(time.Second)
-// 	}
-// }
+func (w *wfilter) waitForClick() {
+	_ = <-*w.clicks
+}
 
 func main() {
-	_, err := setup()
+	wf := newWFilter()
+	err := wf.setup()
 	if err != nil {
-		panic(err)
-	}
-	fmt.Println("finished setup")
-
-	//	err = f.handleRequest()
-	if err != nil {
-		panic(err)
+		log.Println("error while setting up", err)
+		return
 	}
 
 	for {
-		time.Sleep(10000)
+		wf.waitForClick()
+		wf.runWater()
+		wf.clearClicks()
 	}
 }
